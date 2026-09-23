@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Red Neuronal 4→8→16 · Entrenamiento paso a paso</title>
+<style>
+  :root{
+    --bg:#070c18; --panel:#0f1a2e; --stroke:#1e3050;
+    --txt:#e8eef8; --muted:#8ba0bd;
+    --pos:#38bdf8; --neg:#fb7185; --ok:#34d399; --warn:#fbbf24; --acc:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;color:var(--txt);
+    background:
+      radial-gradient(1200px 700px at 12% -10%, #16233d 0%, transparent 60%),
+      radial-gradient(900px 600px at 98% 0%, #1c1738 0%, transparent 55%),
+      var(--bg);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .app{max-width:1720px;margin:0 auto;padding:14px 18px 30px}
+
+  /* ---------- HUD ---------- */
+  .hud{
+    display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;
+    background:linear-gradient(180deg,#132039,#0d1729);
+    border:1px solid var(--stroke);border-radius:16px;padding:14px 18px;
+    box-shadow:0 14px 44px -24px #000;
+  }
+  .hud h1{font-size:18px;margin:0;letter-spacing:.2px}
+  .hud .sub{margin:4px 0 0;font-size:12.5px;color:var(--muted)}
+
+  .metrics{display:flex;gap:10px;flex-wrap:wrap}
+  .metric{
+    background:#0a1425;border:1px solid var(--stroke);border-radius:12px;
+    padding:7px 14px;min-width:104px;text-align:center
+  }
+  .metric .k{display:block;font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted)}
+  .metric .v{display:block;font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;color:#fff}
+  .metric.loss .v{color:var(--warn)}
+  .metric.acc  .v{color:var(--ok)}
+
+  .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  button{
+    font:inherit;font-size:13.5px;font-weight:600;cursor:pointer;
+    background:#16243c;color:var(--txt);border:1px solid #2b4265;
+    border-radius:11px;padding:10px 14px;transition:.15s;
+  }
+  button:hover{background:#1e3354;border-color:#3b5c8c;transform:translateY(-1px)}
+  button:active{transform:translateY(0)}
+  button.primary{
+    background:linear-gradient(180deg,#7c3aed,#5b21b6);border-color:#8b5cf6;
+    box-shadow:0 10px 24px -12px #8b5cf6;padding:11px 20px;font-size:14px;
+  }
+  button.primary:hover{background:linear-gradient(180deg,#8b5cf6,#6d28d9)}
+  button.on{
+    background:linear-gradient(180deg,#0ea5e9,#0369a1);border-color:#38bdf8;
+    box-shadow:0 8px 20px -12px #38bdf8;
+  }
+
+  /* ---------- Stage ---------- */
+  .stage{
+    margin-top:14px;border:1px solid var(--stroke);border-radius:16px;
+    background:linear-gradient(180deg,#0a1224,#081020);
+    padding:6px 8px;box-shadow:inset 0 0 130px -60px #3b82f6;
+  }
+  svg#net{display:block;width:100%;height:auto}
+
+  /* ---------- Footer ---------- */
+  .foot{
+    margin-top:14px;display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;
+    background:#0d1729;border:1px solid var(--stroke);border-radius:16px;padding:12px 16px;
+  }
+  .samples{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .samples .lbl{font-size:12.5px;color:var(--muted);margin-right:6px}
+  .sbtn{
+    width:34px;height:34px;padding:0;border-radius:9px;font-size:13px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .sbtn.active{background:linear-gradient(180deg,#7c3aed,#5b21b6);border-color:#a78bfa;color:#fff}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted);align-items:center}
+  .legend i{display:inline-block;width:22px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+  .resultado{font-size:13px;color:var(--muted)}
+  .resultado b{color:#fff}
+  .spark{background:#0a1425;border:1px solid var(--stroke);border-radius:10px}
+
+  /* ---------- Tooltip ---------- */
+  #tooltip{
+    position:fixed;pointer-events:none;z-index:99;
+    background:#0b1729;border:1px solid #2b4265;border-radius:9px;
+    padding:6px 10px;font-size:12.5px;font-weight:600;color:#fff;
+    font-family:ui-monospace,monospace;
+    box-shadow:0 10px 24px -12px #000;
+    display:none;white-space:nowrap;
+  }
+  #tooltip .k{color:#8ba0bd;font-weight:500;margin-right:6px}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="hud">
+    <div>
+      <h1>Red Neuronal 4 → 8 → 16 · Clasificador Hexadecimal</h1>
+      <p class="sub">Entrada 4 bits (imagen 2×2) · Capa oculta ReLU (8) · Salida logits (16) · Softmax · CrossEntropy + SGD (lr = 0.1)</p>
+    </div>
+
+    <div class="metrics">
+      <div class="metric"><span class="k">Época</span><span class="v" id="mEpoch">0</span></div>
+      <div class="metric loss"><span class="k">Pérdida</span><span class="v" id="mLoss">—</span></div>
+      <div class="metric acc"><span class="k">Precisión</span><span class="v" id="mAcc">—</span></div>
+    </div>
+
+    <div class="controls">
+      <button id="btnNext" class="primary">Siguiente época ▶</button>
+      <button id="btn10">+10</button>
+      <button id="btn100">+100</button>
+      <button id="btnAuto">▶ Auto</button>
+      <button id="btnW1">Mostrar pesos E→H</button>
+      <button id="btnW2">Mostrar pesos H→S</button>
+      <button id="btnReset">⟲ Reiniciar</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <svg id="net" viewBox="0 0 1700 1250" preserveAspectRatio="xMidYMid meet"></svg>
+  </div>
+
+  <div class="foot">
+    <div class="samples">
+      <span class="lbl">Ver muestra:</span>
+      <div id="sampleBtns" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+    </div>
+
+    <div class="resultado" id="resultado">—</div>
+
+    <div class="legend">
+      <span><i style="background:#38bdf8"></i>peso positivo</span>
+      <span><i style="background:#fb7185"></i>peso negativo</span>
+      <span><i style="background:#f59e0b"></i>activación ReLU alta</span>
+      <svg class="spark" id="spark" width="210" height="48" viewBox="0 0 210 48"></svg>
+    </div>
+  </div>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+/* =========================================================
+   0. UTILIDADES
+   ========================================================= */
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs = {}, parent = null) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function hex2rgb(h){h=h.replace('#','');return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)];}
+function lerpColor(a,b,t){
+  const A=hex2rgb(a),B=hex2rgb(b);
+  const c=A.map((v,i)=>Math.round(v+(B[i]-v)*t));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+function mulberry32(a){
+  return function(){
+    a|=0; a=a+0x6D2B79F5|0;
+    let t=Math.imul(a^a>>>15,1|a);
+    t=t+Math.imul(t^t>>>7,61|t)^t;
+    return ((t^t>>>14)>>>0)/4294967296;
+  };
+}
+/* acorta una línea por r1 al inicio y r2 al final (para que las flechas no toquen los círculos) */
+function shorten(x1,y1,x2,y2,r1,r2){
+  const dx=x2-x1, dy=y2-y1, L=Math.hypot(dx,dy);
+  if (L===0) return [x1,y1,x2,y2];
+  const ux=dx/L, uy=dy/L;
+  return [x1+r1*ux, y1+r1*uy, x2-r2*ux, y2-r2*uy];
+}
+
+/* =========================================================
+   1. DATASET  (idéntico al del notebook)
+   ========================================================= */
+const X = [], Y = [];
+for (let i = 0; i < 16; i++) {
+  X.push([(i>>3)&1, (i>>2)&1, (i>>1)&1, i&1]);   // MSB … LSB
+  Y.push(i);
+}
+const HEX = "0123456789ABCDEF";
+
+/* =========================================================
+   2. GEOMETRÍA DEL DIAGRAMA  (mucho más aire vertical)
+   ========================================================= */
+const VIEW_W = 1700, VIEW_H = 1250;
+
+/* imagen 2×2 (nibble actual) */
+const IMG_X = 30, IMG_Y = 580, IMG_SIZE = 90;
+
+/* columnas */
+const IN_CX  = 250,  IN_R  = 30;
+const HID_CX = 690,  HID_R = 30;
+const OUT_CX = 1130, OUT_R = 18;
+const SM_X   = 1310, SM_W  = 200, SM_H = 36;
+const HEX_X  = 1288;                   // etiqueta hex (derecha alineada)
+const VAL_X  = 1528;                   // valor numérico softmax
+const SM_LABEL_X = 1640;               // texto vertical "SOFTMAX"
+
+/* posiciones verticales: 16 salidas c/70px, 8 ocultas c/140px, 4 entradas c/240px */
+const IN_Y  = [265, 505, 745, 985];
+const HID_Y = [135, 275, 415, 555, 695, 835, 975, 1115];
+const OUT_Y = Array.from({length:16}, (_, i) => 100 + i * 70);
+
+/* =========================================================
+   3. ESTADO
+   ========================================================= */
+const LR = 0.1, SEED = 42;
+const S = {
+  W1:null, b1:null, W2:null, b2:null,
+  epoch:0, loss:0, acc:0, cache:null,
+  sample:10, playing:false, timer:null,
+  showW1:false, showW2:false
+};
+let lossHist = [];
+const REF = { e1:[], e2:[], in:[], hid:[], out:[], bars:[], px:[], w1lbl:[], w2lbl:[], img:null };
+
+/* =========================================================
+   4. INICIALIZACIÓN (estilo nn.Linear: U(-1/√fan_in, 1/√fan_in))
+   ========================================================= */
+function makeParams(seed){
+  const rnd = mulberry32(seed);
+  const u = b => (rnd()*2 - 1) * b;
+  const B1 = 1/Math.sqrt(4), B2 = 1/Math.sqrt(8);
+  return {
+    W1: Array.from({length:8},  () => Array.from({length:4}, () => u(B1))),
+    b1: Array.from({length:8},  () => u(B1)),
+    W2: Array.from({length:16}, () => Array.from({length:8}, () => u(B2))),
+    b2: Array.from({length:16}, () => u(B2))
+  };
+}
+
+/* =========================================================
+   5. FORWARD (batch de 16)
+   ========================================================= */
+function forwardAll(){
+  const {W1,b1,W2,b2} = S;
+  const Z1=[], A1=[], Z2=[], P=[];
+  for (let i=0;i<16;i++){
+    const x=X[i];
+    const z1=new Array(8), a1=new Array(8);
+    for (let j=0;j<8;j++){
+      const w=W1[j];
+      const s=b1[j]+w[0]*x[0]+w[1]*x[1]+w[2]*x[2]+w[3]*x[3];
+      z1[j]=s; a1[j]= s>0?s:0;
+    }
+    const z2=new Array(16);
+    for (let k=0;k<16;k++){
+      const w=W2[k];
+      let s=b2[k];
+      for (let j=0;j<8;j++) s+=w[j]*a1[j];
+      z2[k]=s;
+    }
+    let m=-Infinity;
+    for (let k=0;k<16;k++) if (z2[k]>m) m=z2[k];
+    const p=new Array(16); let sum=0;
+    for (let k=0;k<16;k++){ p[k]=Math.exp(z2[k]-m); sum+=p[k]; }
+    for (let k=0;k<16;k++) p[k]/=sum;
+    Z1.push(z1); A1.push(a1); Z2.push(z2); P.push(p);
+  }
+  return {Z1,A1,Z2,P};
+}
+
+/* =========================================================
+   6. BACKWARD
+   ========================================================= */
+function backward(cache){
+  const {W2} = S;
+  const {Z1,A1,P} = cache;
+  const dW1=Array.from({length:8},()=>new Array(4).fill(0));
+  const db1=new Array(8).fill(0);
+  const dW2=Array.from({length:16},()=>new Array(8).fill(0));
+  const db2=new Array(16).fill(0);
+
+  const dZ2=[];
+  for (let i=0;i<16;i++){
+    const d=new Array(16);
+    for (let k=0;k<16;k++) d[k]=P[i][k]/16;
+    d[Y[i]]-=1/16;
+    dZ2.push(d);
+  }
+  for (let i=0;i<16;i++){
+    const d=dZ2[i], a=A1[i];
+    for (let k=0;k<16;k++){
+      const g=d[k]; if (g===0) continue;
+      const row=dW2[k];
+      for (let j=0;j<8;j++) row[j]+=g*a[j];
+      db2[k]+=g;
+    }
+  }
+  for (let i=0;i<16;i++){
+    const d=dZ2[i];
+    const dA1=new Array(8).fill(0);
+    for (let k=0;k<16;k++){
+      const g=d[k]; if (g===0) continue;
+      const w=W2[k];
+      for (let j=0;j<8;j++) dA1[j]+=g*w[j];
+    }
+    const z1=Z1[i], x=X[i];
+    for (let j=0;j<8;j++){
+      if (z1[j]<=0) continue;
+      const g=dA1[j], row=dW1[j];
+      row[0]+=g*x[0]; row[1]+=g*x[1]; row[2]+=g*x[2]; row[3]+=g*x[3];
+      db1[j]+=g;
+    }
+  }
+  return {dW1,db1,dW2,db2};
+}
+
+/* =========================================================
+   7. SGD
+   ========================================================= */
+function applyUpdate(g){
+  for (let j=0;j<8;j++){
+    for (let k=0;k<4;k++) S.W1[j][k] -= LR*g.dW1[j][k];
+    S.b1[j] -= LR*g.db1[j];
+  }
+  for (let k=0;k<16;k++){
+    for (let j=0;j<8;j++) S.W2[k][j] -= LR*g.dW2[k][j];
+    S.b2[k] -= LR*g.db2[k];
+  }
+}
+
+/* =========================================================
+   8. MÉTRICAS
+   ========================================================= */
+function refresh(){
+  S.cache = forwardAll();
+  const P=S.cache.P;
+  let loss=0, corr=0;
+  for (let i=0;i<16;i++){
+    loss += -Math.log(Math.max(P[i][Y[i]],1e-12));
+    let am=0;
+    for (let k=1;k<16;k++) if (P[i][k]>P[i][am]) am=k;
+    if (am===Y[i]) corr++;
+  }
+  S.loss = loss/16;
+  S.acc  = corr/16*100;
+}
+
+/* =========================================================
+   9. BUILD (todo el SVG una sola vez)
+   ========================================================= */
+function build(){
+  const svg = document.getElementById('net');
+  svg.innerHTML = '';
+  REF.e1=[];REF.e2=[];REF.in=[];REF.hid=[];REF.out=[];REF.bars=[];
+  REF.px=[];REF.w1lbl=[];REF.w2lbl=[];
+
+  /* ---- defs (markers + gradiente) ---- */
+  const defs = el('defs', {}, svg);
+  function marker(id, color){
+    const m = el('marker', {
+      id, viewBox:'0 0 10 10', refX:'9', refY:'5',
+      markerWidth:'7', markerHeight:'7',
+      markerUnits:'userSpaceOnUse', orient:'auto'
+    }, defs);
+    el('path',{d:'M0,0 L10,5 L0,10 z', fill:color}, m);
+  }
+  marker('arrPos','#38bdf8');
+  marker('arrNeg','#fb7185');
+  const grad = el('linearGradient',{id:'gradMax',x1:'0',y1:'0',x2:'1',y2:'0'},defs);
+  el('stop',{offset:'0%','stop-color':'#f59e0b'},grad);
+  el('stop',{offset:'100%','stop-color':'#fbbf24'},grad);
+
+  /* ---- capas de dibujo (orden) ---- */
+  const gSep  = el('g',{},svg);
+  const gE1   = el('g',{},svg);
+  const gE2   = el('g',{},svg);
+  const gN    = el('g',{},svg);
+  const gB    = el('g',{},svg);
+  const gT    = el('g',{},svg);
+  const gWL  = el('g',{},svg);
+
+  /* ---- separadores verticales de etapa ---- */
+  [425, 900, 1240].forEach(x=>{
+    el('line',{x1:x,y1:70,x2:x,y2:1200,stroke:'#22344f','stroke-width':1,
+               'stroke-dasharray':'4 8',opacity:.35}, gSep);
+  });
+
+  /* ---- títulos de columna ---- */
+  function title(x,y,text,fill='#8ba0bd',size=13,weight=700,anchor='middle'){
+    el('text',{x,y,fill,'font-size':size,'font-weight':weight,
+               'text-anchor':anchor,'letter-spacing':'1.2'},gT).textContent = text;
+  }
+  title(80,   60,'IMAGEN 2×2');
+  title(IN_CX,60,'ENTRADA · 4 bits');
+  title(HID_CX,60,'CAPA OCULTA · ReLU (8)');
+  title(OUT_CX,60,'SALIDA · logits (16)');
+  title(SM_X + SM_W/2, 60, 'SOFTMAX (16)');
+  title(80,   95,'nibble actual',   '#546b8a', 11, 500);
+  title(IN_CX,95,'valor del bit',    '#546b8a', 11, 500);
+  title(HID_CX,95,'activación · bias debajo', '#546b8a', 11, 500);
+  title(OUT_CX,95,'logit · bias debajo',      '#546b8a', 11, 500);
+  title(SM_X + SM_W/2, 95, 'probabilidad',    '#546b8a', 11, 500);
+
+  /* ---- imagen 2×2 (nibble) ---- */
+  const gImg = el('g',{},gN);
+  const cell = IMG_SIZE/2;
+  el('rect',{x:IMG_X-3,y:IMG_Y-3,width:IMG_SIZE+6,height:IMG_SIZE+6,
+             rx:8,fill:'#0a1425',stroke:'#2b4265','stroke-width':1.4},gImg);
+  // orden píxeles: 0=sup-izq, 1=sup-der, 2=inf-izq, 3=inf-der  (como el notebook)
+  const pxPos = [
+    [IMG_X,        IMG_Y       ],
+    [IMG_X+cell,   IMG_Y       ],
+    [IMG_X,        IMG_Y+cell  ],
+    [IMG_X+cell,   IMG_Y+cell  ]
+  ];
+  pxPos.forEach(([px,py],k)=>{
+    const r = el('rect',{x:px,y:py,width:cell,height:cell,
+                         fill:'#ffffff',stroke:'#1e3050','stroke-width':1},gImg);
+    REF.px.push(r);
+  });
+  // etiqueta de qué nibble es
+  const pxLbl = el('text',{x:IMG_X+IMG_SIZE/2,y:IMG_Y+IMG_SIZE+26,
+                           'text-anchor':'middle','font-size':13,
+                           'font-weight':700,fill:'#c7d5e8',
+                           'font-family':'ui-monospace,monospace'},gImg);
+  REF.img = pxLbl;
+
+  /* ---- flechas imagen → neuronas de entrada ---- */
+  const gArrImg = el('g',{},gN);
+  for (let k=0;k<4;k++){
+    const [px,py] = pxPos[k];
+    const sx = px + cell, sy = py + cell/2;
+    const ex = IN_CX - IN_R, ey = IN_Y[k];
+    const [a,b,c,d] = shorten(sx,sy,ex,ey,3,4);
+    el('line',{x1:a,y1:b,x2:c,y2:d,stroke:'#7f93b0','stroke-width':1.3,
+               'marker-end':'url(#arrPos)',opacity:.65},gArrImg);
+  }
+
+  /* ---- conexiones entrada → oculta (32) ---- */
+  for (let j=0;j<8;j++){
+    for (let k=0;k<4;k++){
+      const [x1,y1,x2,y2] = shorten(IN_CX,IN_Y[k],HID_CX,HID_Y[j],IN_R+2,HID_R+2);
+      const l = el('line',{x1,y1,x2,y2,stroke:'#38bdf8','stroke-width':1.2,
+                           'stroke-linecap':'round',
+                           'marker-end':'url(#arrPos)'},gE1);
+      REF.e1.push({l,j,k, mx:(x1+x2)/2, my:(y1+y2)/2});
+    }
+  }
+  /* ---- conexiones oculta → salida (128) ---- */
+  for (let i=0;i<16;i++){
+    for (let j=0;j<8;j++){
+      const [x1,y1,x2,y2] = shorten(HID_CX,HID_Y[j],OUT_CX,OUT_Y[i],HID_R+2,OUT_R+2);
+      const l = el('line',{x1,y1,x2,y2,stroke:'#38bdf8','stroke-width':0.9,
+                           'stroke-linecap':'round',
+                           'marker-end':'url(#arrPos)'},gE2);
+      REF.e2.push({l,i,j, mx:(x1+x2)/2, my:(y1+y2)/2});
+    }
+  }
+
+  /* ---- neuronas de entrada ---- */
+  IN_Y.forEach((y,k)=>{
+    const g = el('g',{},gN);
+    const c = el('circle',{cx:IN_CX,cy:y,r:IN_R,fill:'#1a2740',
+                           stroke:'#2b3f5e','stroke-width':2},g);
+    const t = el('text',{x:IN_CX,y:y+7,'text-anchor':'middle',
+                         'font-size':18,'font-weight':800,
+                         'font-family':'ui-monospace,monospace'},g);
+    const lbl = el('text',{x:IN_CX,y:y+IN_R+22,'text-anchor':'middle',
+                           'font-size':11,fill:'#7f93b0',
+                           'font-family':'ui-monospace,monospace'},g);
+    lbl.textContent = 'x' + k + '  (bit ' + (3-k) + ')';
+    REF.in.push({c,t,lbl});
+  });
+
+  /* ---- neuronas ocultas ---- */
+  HID_Y.forEach((y,j)=>{
+    const g = el('g',{},gN);
+    const c = el('circle',{cx:HID_CX,cy:y,r:HID_R,fill:'#182742',
+                           stroke:'#31496e','stroke-width':2},g);
+    const t = el('text',{x:HID_CX,y:y+6,'text-anchor':'middle',
+                         'font-size':13,'font-weight':700,fill:'#fff',
+                         'font-family':'ui-monospace,monospace'},g);
+    const b = el('text',{x:HID_CX,y:y+HID_R+21,'text-anchor':'middle',
+                         'font-size':11,fill:'#8ba0bd',
+                         'font-family':'ui-monospace,monospace'},g);
+    const lbl = el('text',{x:HID_CX-HID_R-16,y:y+4,'text-anchor':'end',
+                           'font-size':10,fill:'#546b8a',
+                           'font-family':'ui-monospace,monospace'},g);
+    lbl.textContent = 'h' + j;
+    REF.hid.push({c,t,b,lbl});
+  });
+
+  /* ---- neuronas de salida (logits) ---- */
+  OUT_Y.forEach((y,i)=>{
+    const g = el('g',{},gN);
+    const c = el('circle',{cx:OUT_CX,cy:y,r:OUT_R,fill:'#152238',
+                           stroke:'#2e4467','stroke-width':1.6},g);
+    const t = el('text',{x:OUT_CX,y:y+4,'text-anchor':'middle',
+                         'font-size':10,'font-weight':700,fill:'#fff',
+                         'font-family':'ui-monospace,monospace'},g);
+    const b = el('text',{x:OUT_CX,y:y+OUT_R+13,'text-anchor':'middle',
+                         'font-size':9,fill:'#7f93b0',
+                         'font-family':'ui-monospace,monospace'},g);
+    REF.out.push({c,t,b});
+  });
+
+  /* ---- barras Softmax ---- */
+  OUT_Y.forEach((y,i)=>{
+    // etiqueta hex
+    el('text',{x:HEX_X,y:y+5,'text-anchor':'end','font-size':14,
+               'font-weight':800,fill:'#c7d5e8',
+               'font-family':'ui-monospace,monospace'},gB).textContent = HEX[i];
+    // pista
+    el('rect',{x:SM_X,y:y-SM_H/2,width:SM_W,height:SM_H,rx:7,
+               fill:'#0b1425',stroke:'#1e2f4a','stroke-width':1},gB);
+    // barra
+    const bar = el('rect',{x:SM_X+1,y:y-SM_H/2+1,width:2,height:SM_H-2,rx:6,
+                           fill:'#38bdf8'},gB);
+    // valor numérico
+    const val = el('text',{x:VAL_X,y:y+5,'text-anchor':'start',
+                           'font-size':12,fill:'#dbe6f5',
+                           'font-family':'ui-monospace,monospace'},gB);
+    REF.bars.push({bar,val});
+  });
+
+  /* ---- texto vertical "SOFTMAX" ---- */
+  const smTxt = el('text',{x:SM_LABEL_X,y:625,
+                           'text-anchor':'middle',
+                           'font-size':15,'font-weight':800,
+                           'letter-spacing':'4',
+                           fill:'#34d399',
+                           transform:`rotate(-90 ${SM_LABEL_X} 625)`},gT);
+  smTxt.textContent = 'SOFTMAX';
+
+  /* ---- etiquetas de pesos (ocultas hasta que se activen) ---- */
+  REF.e1.forEach(o=>{
+    const t = el('text',{x:o.mx, y:o.my-2, 'text-anchor':'middle',
+                         'font-size':9.5,'fill':'#c7d5e8',
+                         'font-family':'ui-monospace,monospace',
+                         'paint-order':'stroke','stroke':'#0a1425','stroke-width':3,
+                         opacity:0},gWL);
+    REF.w1lbl.push(t);
+  });
+  REF.e2.forEach(o=>{
+    const t = el('text',{x:o.mx, y:o.my-1.5, 'text-anchor':'middle',
+                         'font-size':8,'fill':'#c7d5e8',
+                         'font-family':'ui-monospace,monospace',
+                         'paint-order':'stroke','stroke':'#0a1425','stroke-width':2.5,
+                         opacity:0},gWL);
+    REF.w2lbl.push(t);
+  });
+
+  /* ---- tooltip listeners ---- */
+  const tip = document.getElementById('tooltip');
+  function attach(line, getW, getLabel){
+    line.style.cursor = 'crosshair';
+    line.addEventListener('mouseenter', ()=>{
+      const w = getW();
+      tip.innerHTML = `<span class="k">${getLabel()}</span> w = ${w.toFixed(4)}`;
+      tip.style.display = 'block';
+      line.setAttribute('data-hover','1');
+    });
+    line.addEventListener('mousemove', (e)=>{
+      tip.style.left = (e.clientX + 14) + 'px';
+      tip.style.top  = (e.clientY + 14) + 'px';
+    });
+    line.addEventListener('mouseleave', ()=>{
+      tip.style.display = 'none';
+      line.removeAttribute('data-hover');
+    });
+  }
+  REF.e1.forEach((o,idx)=>{
+    attach(o.l, ()=> S.W1[o.j][o.k], ()=> `E→H · x${o.k} → h${o.j}`);
+  });
+  REF.e2.forEach((o,idx)=>{
+    attach(o.l, ()=> S.W2[o.i][o.j], ()=> `H→S · h${o.j} → out${HEX[o.i]}`);
+  });
+}
+
+/* =========================================================
+   10. RENDER
+   ========================================================= */
+function render(){
+  const i = S.sample;
+  const {Z1,A1,Z2,P} = S.cache;
+  const z1=Z1[i], a1=A1[i], z2=Z2[i], p=P[i];
+
+  /* HUD */
+  document.getElementById('mEpoch').textContent = S.epoch;
+  document.getElementById('mLoss').textContent  = S.loss.toFixed(4);
+  document.getElementById('mAcc').textContent   = S.acc.toFixed(1)+'%';
+
+  /* imagen 2×2 */
+  for (let k=0;k<4;k++){
+    const bit = X[i][k];
+    REF.px[k].setAttribute('fill', bit ? '#0b0f1a' : '#f5f7fb');
+    REF.px[k].setAttribute('stroke', bit ? '#38bdf8' : '#2b4265');
+  }
+  REF.img.textContent = HEX[i] + '  (' + X[i].join('') + ')';
+
+  /* conexiones E→H */
+  for (let idx=0; idx<REF.e1.length; idx++){
+    const o = REF.e1[idx];
+    const w = S.W1[o.j][o.k];
+    const t = Math.min(1, Math.abs(w)/1.1);
+    o.l.setAttribute('stroke', w>=0 ? '#38bdf8' : '#fb7185');
+    o.l.setAttribute('stroke-width', (0.7 + 3.6*t).toFixed(2));
+    o.l.setAttribute('stroke-opacity', (0.18 + 0.72*t).toFixed(2));
+    o.l.setAttribute('marker-end', w>=0 ? 'url(#arrPos)' : 'url(#arrNeg)');
+    if (S.showW1){
+      REF.w1lbl[idx].setAttribute('opacity', 1);
+      REF.w1lbl[idx].textContent = w.toFixed(2);
+    } else {
+      REF.w1lbl[idx].setAttribute('opacity', 0);
+    }
+  }
+
+  /* conexiones H→S */
+  for (let idx=0; idx<REF.e2.length; idx++){
+    const o = REF.e2[idx];
+    const w = S.W2[o.i][o.j];
+    const t = Math.min(1, Math.abs(w)/1.1);
+    o.l.setAttribute('stroke', w>=0 ? '#38bdf8' : '#fb7185');
+    o.l.setAttribute('stroke-width', (0.4 + 2.8*t).toFixed(2));
+    o.l.setAttribute('stroke-opacity', (0.08 + 0.52*t).toFixed(2));
+    o.l.setAttribute('marker-end', w>=0 ? 'url(#arrPos)' : 'url(#arrNeg)');
+    if (S.showW2){
+      REF.w2lbl[idx].setAttribute('opacity', 1);
+      REF.w2lbl[idx].textContent = w.toFixed(2);
+    } else {
+      REF.w2lbl[idx].setAttribute('opacity', 0);
+    }
+  }
+
+  /* entradas */
+  REF.in.forEach((n,k)=>{
+    const bit = X[i][k];
+    n.c.setAttribute('fill',   bit ? '#0e7490' : '#1a2740');
+    n.c.setAttribute('stroke', bit ? '#22d3ee' : '#2b3f5e');
+    n.t.textContent = bit;
+    n.t.setAttribute('fill', bit ? '#e0fbff' : '#6b7f9c');
+  });
+
+  /* ocultas (activación ReLU + bias) */
+  const maxA = Math.max(...a1, 0.0001);
+  REF.hid.forEach((n,j)=>{
+    const a = a1[j];
+    const t = Math.min(1, a/maxA);
+    n.c.setAttribute('fill',   lerpColor('#182742','#f59e0b', t*0.9));
+    n.c.setAttribute('stroke', lerpColor('#31496e','#fbbf24', t));
+    n.t.textContent = a.toFixed(2);
+    n.t.setAttribute('fill', t>0.55 ? '#1a1204' : '#e8eef8');
+    n.b.textContent = 'b=' + S.b1[j].toFixed(2);
+  });
+
+  /* salidas (logit + bias) */
+  const zmin = Math.min(...z2), zmax = Math.max(...z2);
+  REF.out.forEach((n,k)=>{
+    const t = zmax>zmin ? (z2[k]-zmin)/(zmax-zmin) : 0.5;
+    n.c.setAttribute('fill',   lerpColor('#152238','#7c3aed', t*0.88));
+    n.c.setAttribute('stroke', lerpColor('#2e4467','#c4b5fd', t));
+    n.t.textContent = z2[k].toFixed(2);
+    n.b.textContent = 'b=' + S.b2[k].toFixed(2);
+  });
+
+  /* softmax */
+  let argmax = 0;
+  for (let k=1;k<16;k++) if (p[k]>p[argmax]) argmax = k;
+  REF.bars.forEach((b,k)=>{
+    const prob = p[k];
+    const w = Math.max(2, prob*SM_W - 2);
+    b.bar.setAttribute('width', w.toFixed(2));
+    b.bar.setAttribute('fill', k===argmax
+      ? 'url(#gradMax)'
+      : lerpColor('#1e3a5f','#38bdf8', Math.min(1, Math.sqrt(prob)*1.6)));
+    b.val.textContent = prob.toFixed(4);
+    b.val.setAttribute('fill', k===argmax ? '#fbbf24' : '#9fb3cd');
+    b.val.setAttribute('font-weight', k===argmax ? 800 : 500);
+  });
+
+  /* resultado textual */
+  const res = document.getElementById('resultado');
+  const ok  = argmax === i;
+  res.innerHTML =
+    `Muestra <b>${HEX[i]}</b> (${X[i].join('')}) → ` +
+    `predicho <b style="color:${ok?'#34d399':'#fb7185'}">${HEX[argmax]}</b> ` +
+    `· esperado <b>${HEX[i]}</b> · confianza <b>${(p[argmax]*100).toFixed(2)}%</b>`;
+
+  drawSpark();
+}
+
+/* =========================================================
+   11. MINI-GRÁFICO DE PÉRDIDA
+   ========================================================= */
+function drawSpark(){
+  const svg = document.getElementById('spark');
+  svg.innerHTML = '';
+  const W=210,H=48,pad=6;
+  el('rect',{x:0,y:0,width:W,height:H,rx:9,fill:'#0a1425'},svg);
+  if (lossHist.length<2) return;
+  const data = lossHist.slice(-260);
+  const mn = Math.min(...data), mx = Math.max(...data, mn+0.001);
+  const pts = data.map((v,idx)=>{
+    const x = pad + (idx/(data.length-1))*(W-pad*2);
+    const y = H-pad - ((v-mn)/(mx-mn))*(H-pad*2);
+    return x.toFixed(1)+','+y.toFixed(1);
+  }).join(' ');
+  el('polyline',{points:pts,fill:'none',stroke:'#fbbf24',
+                 'stroke-width':1.8,'stroke-linejoin':'round',
+                 'stroke-linecap':'round'},svg);
+  el('text',{x:8,y:13,'font-size':9,fill:'#8ba0bd',
+             'font-family':'ui-monospace,monospace'},svg)
+    .textContent = 'loss ' + data[data.length-1].toFixed(3);
+}
+
+/* =========================================================
+   12. ENTRENAMIENTO
+   ========================================================= */
+function nextEpoch(n=1){
+  for (let s=0;s<n;s++){
+    const g = backward(S.cache);
+    applyUpdate(g);
+    S.epoch++;
+    refresh();
+    lossHist.push(S.loss);
+    if (lossHist.length>4000) lossHist.shift();
+  }
+  render();
+}
+function reset(){
+  stopAuto();
+  Object.assign(S, makeParams(SEED));
+  S.epoch=0; lossHist=[];
+  refresh(); lossHist.push(S.loss);
+  render();
+  document.querySelectorAll('.sbtn').forEach((b,k)=>
+    b.classList.toggle('active', k===S.sample));
+}
+function startAuto(){
+  if (S.playing) return;
+  S.playing = true;
+  const b = document.getElementById('btnAuto');
+  b.classList.add('on'); b.textContent = '⏸ Pausa';
+  S.timer = setInterval(()=>nextEpoch(1), 110);
+}
+function stopAuto(){
+  S.playing = false;
+  clearInterval(S.timer);
+  const b = document.getElementById('btnAuto');
+  if (b){ b.classList.remove('on'); b.textContent = '▶ Auto'; }
+}
+
+/* =========================================================
+   13. UI
+   ========================================================= */
+function buildSampleButtons(){
+  const cont = document.getElementById('sampleBtns');
+  cont.innerHTML = '';
+  for (let i=0;i<16;i++){
+    const b = document.createElement('button');
+    b.className = 'sbtn' + (i===S.sample?' active':'');
+    b.textContent = HEX[i];
+    b.title = 'bits ' + X[i].join('');
+    b.onclick = ()=>{
+      S.sample = i;
+      document.querySelectorAll('.sbtn').forEach((x,k)=>
+        x.classList.toggle('active', k===i));
+      render();
+    };
+    cont.appendChild(b);
+  }
+}
+
+/* =========================================================
+   14. ARRANQUE
+   ========================================================= */
+window.addEventListener('DOMContentLoaded', ()=>{
+  build();
+
+  Object.assign(S, makeParams(SEED));
+  refresh();
+  lossHist.push(S.loss);
+  render();
+  buildSampleButtons();
+
+  document.getElementById('btnNext').onclick  = ()=>{ stopAuto(); nextEpoch(1); };
+  document.getElementById('btn10').onclick    = ()=>{ stopAuto(); nextEpoch(10); };
+  document.getElementById('btn100').onclick   = ()=>{ stopAuto(); nextEpoch(100); };
+  document.getElementById('btnReset').onclick = reset;
+  document.getElementById('btnAuto').onclick  = ()=> S.playing ? stopAuto() : startAuto();
+
+  const bW1 = document.getElementById('btnW1');
+  bW1.onclick = ()=>{
+    S.showW1 = !S.showW1;
+    bW1.classList.toggle('on', S.showW1);
+    bW1.textContent = S.showW1 ? 'Ocultar pesos E→H' : 'Mostrar pesos E→H';
+    render();
+  };
+  const bW2 = document.getElementById('btnW2');
+  bW2.onclick = ()=>{
+    S.showW2 = !S.showW2;
+    bW2.classList.toggle('on', S.showW2);
+    bW2.textContent = S.showW2 ? 'Ocultar pesos H→S' : 'Mostrar pesos H→S';
+    render();
+  };
+
+  window.addEventListener('keydown', e=>{
+    if (e.key === 'ArrowRight'){ stopAuto(); nextEpoch(1); }
+    if (e.key === ' '){ e.preventDefault(); S.playing ? stopAuto() : startAuto(); }
+  });
+});
+</script>
+</body>
+</html>
