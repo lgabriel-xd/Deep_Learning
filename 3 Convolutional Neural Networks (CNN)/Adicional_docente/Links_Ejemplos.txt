@@ -1,0 +1,3 @@
+https://adamharley.com/nn_vis/mlp/3d.html
+https://www.bulovic.at/cnn/
+https://poloclub.github.io/cnn-explainer/#article-pooling
